@@ -1,8 +1,9 @@
 module github.com/braintree/heckler
 
-go 1.13
+go 1.16
 
 require (
+	github.braintreeps.com/braintree/heckler-plugins v0.0.0-00010101000000-000000000000
 	github.com/Masterminds/goutils v1.1.0 // indirect
 	github.com/Masterminds/semver v1.5.0 // indirect
 	github.com/Masterminds/semver/v3 v3.0.3
@@ -31,3 +32,5 @@ require (
 	google.golang.org/grpc v1.28.1
 	gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c
 )
+
+replace github.braintreeps.com/braintree/heckler-plugins => ./plugins/heckler-plugins
