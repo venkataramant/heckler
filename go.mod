@@ -3,7 +3,6 @@ module github.com/braintree/heckler
 go 1.16
 
 require (
-	github.braintreeps.com/braintree/heckler-plugins v0.0.0-00010101000000-000000000000
 	github.com/Masterminds/goutils v1.1.0 // indirect
 	github.com/Masterminds/semver v1.5.0 // indirect
 	github.com/Masterminds/semver/v3 v3.0.3
@@ -26,11 +25,9 @@ require (
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/slack-go/slack v0.8.0
 	github.com/square/grange v0.0.0-20200108221412-2a4cb7b5b334
-	golang.org/x/sys v0.0.0-20200202164722-d101bd2416d5 // indirect
 	golang.org/x/text v0.3.2 // indirect
 	google.golang.org/genproto v0.0.0-20200205142000-a86caf926a67 // indirect
 	google.golang.org/grpc v1.28.1
 	gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c
-)
 
-replace github.braintreeps.com/braintree/heckler-plugins => ./plugins/heckler-plugins
+)
