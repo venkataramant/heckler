@@ -8,7 +8,6 @@ require (
 	github.com/Masterminds/semver/v3 v3.0.3
 	github.com/Masterminds/sprig v2.22.0+incompatible
 	github.com/bradleyfalzon/ghinstallation v1.1.1
-	github.com/goccy/go-yaml v1.9.5
 	github.com/gogo/protobuf v1.3.1
 	github.com/google/go-cmp v0.4.1
 	github.com/google/go-github/v29 v29.0.3

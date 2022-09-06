@@ -2945,7 +2945,7 @@ func apply(noopLock *sync.Mutex, applySem chan int, conf *HecklerdConf, repo *gi
 	}
 	logger.Printf("Tag '%s' is ready to apply, applying with set order: %v", nextTag, conf.ApplySetOrder)
 	changeRequestID, createError := snowPluginMGR.SearchAndCreateChangeRequest(conf.EnvPrefix, nextTag)
-	logger.Printf("CreateChangeRequest Status for %s:: : changeRequestID::%t and  createError::'%v'", nextTag, changeRequestID, createError)
+	logger.Printf("CreateChangeRequest Status for %s:: : changeRequestID::%s and  createError::'%v'", nextTag, changeRequestID, createError)
 	/*
 		for {
 			isCheckedIN, checkinError := snowutil.CheckInChangeRequest(changeRequestID)
