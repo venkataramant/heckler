@@ -62,7 +62,7 @@ clean: ## Remove all state
 
 .PHONY: build
 build: vendor/github.com/libgit2/git2go/v31/static-build ## Build heckler, usually called inside the container
-	go build -o . -ldflags '$(GO_LDFLAGS)' ./...
+	go build -o . -ldflags '$(GO_LDFLAGS)' ./cmd/...
 
 .PHONY: vet
 vet: vendor/github.com/libgit2/git2go/v31/static-build ## Vet heckler, usually called inside the container
@@ -75,6 +75,13 @@ test: vendor/github.com/libgit2/git2go/v31/static-build ## Test heckler, usually
 vendor/github.com/libgit2/git2go/v31/static-build: ## Build libgit2
 	go mod vendor
 	./build-libgit2-static
+
+.PHONY: build-plugin
+build-plugin: ## build any plugins
+	if [ ! -z '$(argument)' ]; then\
+        echo "Hello world $(argument)";\
+		go build --buildmode=plugin ./plugins/$(argument).go; \
+    fi
 
 .PHONY: deb
 deb: build ## Build the deb, usually called inside the container
