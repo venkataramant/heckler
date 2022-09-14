@@ -242,6 +242,7 @@ type CRCfg struct {
 type SNowMGRCfg struct {
 	Url            string `yaml:"url"`
 	SnowPluginPath string `yaml:"snow_plugin_path"`
+	OnErrorFail    bool   `yaml:"on_error_fail"`
 	Token          string `yaml:"token"`
 	crCfg          CRCfg  `yaml:"change_request_config"`
 }

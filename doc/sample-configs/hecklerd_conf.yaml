@@ -32,6 +32,13 @@ ignored_resources:
     resources:
       - type: 'File'
         title: '/data/puppet_apply/statler/wit'
+snow_manager_config:
+  snow_plugin_path: '/home/builder/heckler/gsnow_plugin.so'
+  on_error_fail: true
+  url: 'https://servicenow.com/snow'
+  token: 'tokenvalue'
+  change_request_config:
+    env: 'testenv'
 node_sets:
   all:
     cmd:
