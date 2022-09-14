@@ -30,17 +30,18 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/Masterminds/sprig"
 	"github.com/bradleyfalzon/ghinstallation"
+	"github.com/braintree/heckler/internal/gitutil"
+	"github.com/braintree/heckler/internal/heckler"
+	"github.com/braintree/heckler/internal/hecklerpb"
+	snow_plugin "github.com/braintree/heckler/internal/managers/snow"
+	"github.com/braintree/heckler/internal/puppetutil"
+	"github.com/braintree/heckler/internal/rizzopb"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/google/go-github/v29/github"
 	"github.com/hmarr/codeowners"
 	git "github.com/libgit2/git2go/v31"
 	gitcgiserver "github.com/lollipopman/git-cgi-server"
-	"github.com/braintree/heckler/internal/gitutil"
-	"github.com/braintree/heckler/internal/heckler"
-	"github.com/braintree/heckler/internal/hecklerpb"
-	"github.com/braintree/heckler/internal/puppetutil"
-	"github.com/braintree/heckler/internal/rizzopb"
 	"github.com/rickar/cal/v2"
 	"github.com/rickar/cal/v2/us"
 	"github.com/robfig/cron/v3"
@@ -231,8 +232,19 @@ type HecklerdConf struct {
 	SlackPrivateConfPath       string                `yaml:"slack_private_conf_path"`
 	StateDir                   string                `yaml:"state_dir"`
 	WorkRepo                   string                `yaml:"work_repo"`
+	SNowMGRCfg                 SNowMGRCfg            `yaml:"snow_manager_config"`
 }
 
+type CRCfg struct {
+	Env  string `yaml:"env"`
+	Key1 string `yaml:"key1"`
+}
+type SNowMGRCfg struct {
+	Url            string `yaml:"url"`
+	SnowPluginPath string `yaml:"snow_plugin_path"`
+	Token          string `yaml:"token"`
+	crCfg          CRCfg  `yaml:"change_request_config"`
+}
 type SlackConf struct {
 	Token string `yaml:"token"`
 }
@@ -1425,6 +1437,11 @@ func copyNodeMap(nodeMap map[string]*Node) map[string]*Node {
 func (hs *hecklerServer) HecklerApply(ctx context.Context, req *hecklerpb.HecklerApplyRequest) (*hecklerpb.HecklerApplyReport, error) {
 	var err error
 	logger := log.New(os.Stdout, "[HecklerApply] ", log.Lshortfile)
+	ghclient, _, err := githubConn(hs.conf)
+
+	if err != nil {
+		fmt.Printf("githubConnError %v", err)
+	}
 	commit, err := gitutil.RevparseToCommit(req.Rev, hs.repo)
 	if err != nil {
 		return nil, err
@@ -1460,7 +1477,10 @@ func (hs *hecklerServer) HecklerApply(ctx context.Context, req *hecklerpb.Heckle
 			return nil, err
 		}
 	} else {
-		appliedNodes, beyondRevNodes, err := applyNodeSet(ns, req.Force, req.Noop, req.Rev, hs.repo, hs.conf.LockMessage, logger)
+		//TODO RAMAN apply same logic ,work it today
+		changeRequestID := "" //TODO 2nd round
+		var emptySnowPluginMGR snow_plugin.SNowPluginManager
+		appliedNodes, beyondRevNodes, err := applyNodeSet(ns, req.Force, req.Noop, req.Rev, hs.repo, hs.conf.LockMessage, hs.conf, ghclient, emptySnowPluginMGR, changeRequestID, logger)
 		if err != nil {
 			return nil, err
 		}
@@ -1480,26 +1500,50 @@ func (hs *hecklerServer) HecklerApply(ctx context.Context, req *hecklerpb.Heckle
 	return har, nil
 }
 
-func applyNodeSet(ns *NodeSet, forceApply bool, noop bool, rev string, repo *git.Repository, lockMsg string, logger *log.Logger) (map[string]*Node, map[string]*Node, error) {
+func applyNodeSet(ns *NodeSet, forceApply bool, noop bool, rev string, repo *git.Repository, lockMsg string, conf *HecklerdConf, ghclient *github.Client, snowPluginMGR snow_plugin.SNowPluginManager, changeRequestID string, logger *log.Logger) (map[string]*Node, map[string]*Node, error) {
 	var err error
 	beyondRevNodes := make(map[string]*Node)
 	appliedNodes := make(map[string]*Node)
-
+	var snowComments string
 	// Check node revision if not force applying
 	if !forceApply {
 		err = lastApplyNodeSet(ns, repo, logger)
 		if err != nil {
 			return nil, nil, err
 		}
+		//Raman--> rev could be a Tag or ??
 		obj, err := gitutil.RevparseToCommit(rev, repo)
 		if err != nil {
 			return nil, nil, err
 		}
 		revId := *obj.Id()
+		//TODO RTest2 call gitutil to update commit with comment with change_ticket
+		issue, issueError := githubIssueFromCommit(ghclient, revId, conf)
+		if issueError != nil {
+			logger.Printf("Error: unable to githubIssueFromCommit: %v", issueError)
+		} else {
+			if changeRequestID != "" {
+				comment := "changeRequestID::" + changeRequestID
+				issueCommentError := githubIssueComment(ghclient, conf, issue, comment)
+				if issueCommentError != nil {
+					logger.Printf("Error: unable to githubIssueComment: %v", issueCommentError)
+				}
+			} else {
+				logger.Printf("changeRequestID is empty")
+			}
+		}
+
 		for host, node := range ns.nodes.active {
 			if commitAlreadyApplied(node.lastApply, revId, repo) {
+				//TODO RTest3 put a note in change_request about commitAlreadyApplied skipping
 				beyondRevNodes[host] = node
 				delete(ns.nodes.active, host)
+				if !noop {
+					logger.Printf("revId %s and host %s", revId, host)
+					snowComments = fmt.Sprintf("Commit::%s is already applied on Host::%s", revId.String(), host)
+					logger.Printf("snowComments %s", snowComments)
+					snowPluginMGR.CommentChangeRequest(changeRequestID, snowComments)
+				}
 			}
 		}
 	}
@@ -1510,7 +1554,11 @@ func applyNodeSet(ns *NodeSet, forceApply bool, noop bool, rev string, repo *git
 	}
 	par := rizzopb.PuppetApplyRequest{Rev: rev, Noop: noop}
 	puppetReportChan := make(chan applyResult)
-	for _, node := range ns.nodes.active {
+	for host, node := range ns.nodes.active {
+		if !noop {
+			snowComments = fmt.Sprintf("Heckler is going to apply Tag::%s, puppet on  Host::%s", rev, host)
+			snowPluginMGR.CommentChangeRequest(changeRequestID, snowComments)
+		}
 		go hecklerApply(node, puppetReportChan, par)
 	}
 
@@ -1520,17 +1568,24 @@ func applyNodeSet(ns *NodeSet, forceApply bool, noop bool, rev string, repo *git
 		if r.err != nil {
 			ns.nodes.active[r.host].err = fmt.Errorf("Apply failed: %w", r.err)
 			errApplyNodes[r.host] = ns.nodes.active[r.host]
+			snowComments = fmt.Sprintf("Failed: %s@%s", r.report.Host, "execution of Puppet apply is failed to run")
 		} else if r.report.Status == "failed" {
 			ns.nodes.active[r.host].err = &applyError{r.host, r.report}
 			errApplyNodes[r.host] = ns.nodes.active[r.host]
+			snowComments = fmt.Sprintf("Failed: %s@%s", r.report.Host, "Puppet applied resulted in failed state")
 		} else {
 			if noop {
 				logger.Printf("Nooped: %s@%s", r.report.Host, r.report.ConfigurationVersion)
 			} else {
 				logger.Printf("Applied: %s@%s", r.report.Host, r.report.ConfigurationVersion)
+				snowComments = fmt.Sprintf("Applied: %s@%s", r.report.Host, r.report.ConfigurationVersion)
 			}
 			appliedNodes[r.report.Host] = ns.nodes.active[r.report.Host]
 		}
+		if !noop {
+			snowPluginMGR.CommentChangeRequest(changeRequestID, snowComments)
+		}
+
 	}
 	unlockNodeSet("root", false, ns, logger)
 	ns.nodes.active = mergeNodeMaps(appliedNodes, beyondRevNodes)
@@ -2818,11 +2873,17 @@ func greatestTagApproved(nextTags []string, priorTag string, conf *HecklerdConf,
 //       If yes
 //         Apply new tag across all nodes
 //   If no, do nothing
-func apply(noopLock *sync.Mutex, applySem chan int, conf *HecklerdConf, repo *git.Repository, templates *template.Template) {
+func apply(noopLock *sync.Mutex, applySem chan int, conf *HecklerdConf, repo *git.Repository, templates *template.Template, snowPluginMGR snow_plugin.SNowPluginManager) {
 	var err error
 	var ns *NodeSet
 	var perApply *NodeSet
 	logger := log.New(os.Stdout, "[apply] ", log.Lshortfile)
+	logger.Println("apply..")
+	ghclient, _, err := githubConn(conf)
+	if err != nil {
+		logger.Printf("Error: unable to connect to GitHub: %v", err)
+		return
+	}
 	select {
 	case applySem <- 1:
 		defer func() { <-applySem }()
@@ -2883,6 +2944,29 @@ func apply(noopLock *sync.Mutex, applySem chan int, conf *HecklerdConf, repo *gi
 		}
 	}
 	logger.Printf("Tag '%s' is ready to apply, applying with set order: %v", nextTag, conf.ApplySetOrder)
+	changeRequestID, createError := snowPluginMGR.SearchAndCreateChangeRequest(conf.EnvPrefix, nextTag)
+	logger.Printf("CreateChangeRequest Status for %s:: : changeRequestID::%s and  createError::'%v'", nextTag, changeRequestID, createError)
+	/*
+		for {
+			isCheckedIN, checkinError := snowutil.CheckInChangeRequest(changeRequestID)
+			logger.Printf("CheckInChangeRequest Status: isCheckedIN::%t and  checkinError::'%v'", isCheckedIN, checkinError)
+
+			if checkinError != nil || isCheckedIN == false {
+				sleepLogMsg := fmt.Sprintf("ChangeRequest %s is failed to CheckIn::  '%v'", changeRequestID, checkinError)
+				sleepAndLog(applySetSleep, time.Duration(10)*time.Second, sleepLogMsg, logger)
+			} else {
+				break
+			}
+
+		}
+	*/
+	isCheckedIN, checkinError := snowPluginMGR.CheckInChangeRequest(changeRequestID)
+	logger.Printf("CheckInChangeRequest Status: isCheckedIN::%t and  checkinError::'%v'", isCheckedIN, checkinError)
+
+	if checkinError != nil || isCheckedIN == false {
+		logger.Printf(changeRequestID, "is not checked, returing from apply")
+		return
+	}
 	var applyErrors []error
 	for nodeSetIndex, nodeSetName := range conf.ApplySetOrder {
 		logger.Printf("Applying Set '%s' (%d of %d sets)", nodeSetName, nodeSetIndex+1, len(conf.ApplySetOrder))
@@ -2895,7 +2979,7 @@ func apply(noopLock *sync.Mutex, applySem chan int, conf *HecklerdConf, repo *gi
 			logger.Printf("Error: unable to dial node set: %v", err)
 			break
 		}
-		appliedNodes, beyondRevNodes, err := applyNodeSet(perApply, false, false, nextTag, repo, conf.LockMessage, logger)
+		appliedNodes, beyondRevNodes, err := applyNodeSet(perApply, false, false, nextTag, repo, conf.LockMessage, conf, ghclient, snowPluginMGR, changeRequestID, logger)
 		if err != nil {
 			logger.Printf("Error: unable to apply nodes, returning: %v", err)
 			closeNodeSet(perApply, logger)
@@ -2915,10 +2999,12 @@ func apply(noopLock *sync.Mutex, applySem chan int, conf *HecklerdConf, repo *gi
 			if applySetSleep > 0 {
 				logger.Printf("Sleeping for %v, before applying next set '%s'...", applySetSleep, conf.ApplySetOrder[nodeSetIndex+1])
 				sleepLogMsg := fmt.Sprintf("Node sets '%v' applied, Next sets to apply '%v'", conf.ApplySetOrder[:nodeSetIndex+1], conf.ApplySetOrder[nodeSetIndex+1:])
-				sleepAndLog(applySetSleep, time.Duration(10)*time.Second, sleepLogMsg, logger)
+				sleepAndLog(applySetSleep, time.Duration(1)*time.Second, sleepLogMsg, logger)
 			}
 		}
 	}
+	isSignedOff, signOffError := snowPluginMGR.SignOffChangeRequest(changeRequestID)
+	logger.Printf("SignOffChangeRequest Status: isSignedOff::%t and  signOffError::'%v'", isSignedOff, signOffError)
 	err = reportErrors(applyErrors, true, conf, templates, logger)
 	if err != nil {
 		logger.Printf("Error: unable to report apply errors, '%v'", err)
@@ -3028,6 +3114,7 @@ func updateIssueApproval(ghclient *github.Client, conf *HecklerdConf, commit *gi
 			return nil
 		}
 	}
+	fmt.Println("calling noopApproved....")
 	ns, err := noopApproved(ghclient, conf, gr.Resources, commit, issue)
 	if err != nil {
 		return fmt.Errorf("Unable to determine if issue(%d) is approved: %w", issue.GetNumber(), err)
@@ -3685,6 +3772,7 @@ func unlockAll(conf *HecklerdConf, logger *log.Logger) error {
 //       If yes, create a new tag
 func autoTag(conf *HecklerdConf, repo *git.Repository) {
 	logger := log.New(os.Stdout, "[autoTag] ", log.Lshortfile)
+	logger.Println("autoTag...")
 	var err error
 	var ns *NodeSet
 	ns = &NodeSet{
@@ -4790,7 +4878,7 @@ func deleteDupIssues(conf *HecklerdConf, repo *git.Repository, logger *log.Logge
 func noopLoop(noopLock *sync.Mutex, conf *HecklerdConf, repo *git.Repository, templates *template.Template) {
 	logger := log.New(os.Stdout, "[noopLoop] ", log.Lshortfile)
 	loopSleep := time.Duration(conf.LoopNoopSleepSeconds) * time.Second
-	logger.Printf("Started, looping every %v", loopSleep)
+	logger.Printf("Started, nooplooping every %v", loopSleep)
 	for {
 		noop(noopLock, conf, repo, templates, logger)
 		logger.Println("Nooping complete, sleeping")
@@ -5077,7 +5165,7 @@ func resourceIgnored(title string, ignoredResources []IgnoredResources) (bool, e
 
 func main() {
 	// add filename and line number to log output
-	log.SetFlags(log.Lshortfile)
+	log.SetFlags(log.Lshortfile | log.LstdFlags)
 	var err error
 	var hecklerdConfPath string
 	var conf *HecklerdConf
@@ -5165,6 +5253,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	snowPluginMGR, snowPluginMGRErr1 := snow_plugin.GetSNowPluginManager(conf.SNowMGRCfg.SnowPluginPath)
+	if snowPluginMGRErr1 != nil {
+		logger.Fatalf("Unable to GetSNowPluginManager error:: %v", snowPluginMGRErr1)
+
+	}
 	// Ensure we have a valid timezone
 	_, err = time.LoadLocation(conf.Timezone)
 	if err != nil {
@@ -5351,7 +5444,7 @@ func main() {
 			hecklerdCron.AddFunc(
 				conf.ApplyCronSchedule,
 				func() {
-					apply(noopLock, applySem, conf, repo, templates)
+					apply(noopLock, applySem, conf, repo, templates, snowPluginMGR)
 				},
 			)
 		}
