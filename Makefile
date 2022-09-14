@@ -78,9 +78,9 @@ vendor/github.com/libgit2/git2go/v31/static-build: ## Build libgit2
 
 .PHONY: build-plugin
 build-plugin: ## build any plugins
-	if [ ! -z '$(argument)' ]; then\
-        echo "Hello world $(argument)";\
-		go build --buildmode=plugin ./plugins/$(argument).go; \
+	if [ ! -z '$(plugin_file)' ]; then\
+        echo "creating plugin $(plugin_file)";\
+		go build --buildmode=plugin ./plugins/$(plugin_file); \
     fi
 
 .PHONY: deb
